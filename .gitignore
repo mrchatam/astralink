@@ -1,0 +1,46 @@
+# Binaries
+/bin/
+astralink-client
+astralink-server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test / coverage
+*.test
+*.out
+coverage.*
+
+# Go workspace
+vendor/
+
+# Local secrets and keys
+encrypt_key.txt
+*.pem
+.env
+.env.*
+
+!.env.example
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Android build outputs
+android/.gradle/
+android/**/build/
+android/local.properties
+*.apk
+*.aab
+
+# Documentation (local only)
+/docs/
+
+# Lab / runtime artifacts
+*.log
+/tmp/

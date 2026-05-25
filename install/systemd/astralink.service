@@ -1,0 +1,15 @@
+[Unit]
+Description=AstraLink authoritative DNS transport server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/astralink
+ExecStart=/opt/astralink/astralink-server -config /opt/astralink/server_config.toml -nowait
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
