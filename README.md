@@ -14,8 +14,8 @@ AstraLink is a DNS transport system built around **Multipath QUIC over DNS**.
 
 ```bash
 cd astralink
-go build -o astralink-server ./cmd/server
-go build -o astralink-client ./cmd/client
+make server client
+bash install/install-server.sh --preflight
 sudo bash install/install-server.sh --local
 ```
 

@@ -156,6 +156,31 @@ find_local_config() {
   return 1
 }
 
+find_local_config_candidate() {
+  local search_dirs=(
+    "$SOURCE_DIR"
+    "$SOURCE_DIR/dist"
+    "$INSTALL_DIR"
+    "$INSTALL_DIR/dist"
+  )
+
+  for sd in "${search_dirs[@]}"; do
+    if [[ -f "$sd/server_config.toml" ]]; then
+      echo "$sd/server_config.toml"
+      return 0
+    fi
+  done
+
+  for sd in "${search_dirs[@]}"; do
+    if [[ -f "$sd/server_config.toml.simple" ]]; then
+      echo "$sd/server_config.toml.simple"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 print_usage() {
   cat <<'USAGE'
 AstraLink Server Linux Installer
@@ -169,6 +194,8 @@ Options:
   -l, --local               Local/offline install: use the server binary and
                             config found in the current directory (or dist/).
                             No download from GitHub is performed.
+  -n, --preflight           Non-destructive safety checks only. Prints what would
+                            be changed and validates prerequisites.
   -u, --uninstall           Uninstall AstraLink: stop and remove the systemd
                             service, drop kernel/limit tunings, and clean up
                             binaries and config files in the install directory.
@@ -185,6 +212,9 @@ Examples:
   make server
   sudo bash install/install-server.sh --local
 
+  # Non-destructive preflight checks:
+  bash install/install-server.sh --preflight
+
   # Uninstall AstraLink:
   bash <(curl -Ls https://raw.githubusercontent.com/mrchatam/astralink/main/install/install-server.sh) --uninstall
 USAGE
@@ -193,6 +223,7 @@ USAGE
 ACTION="install"
 TARGET_VERSION=""
 LOCAL_MODE=0
+PREFLIGHT=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -v|--version)
@@ -210,6 +241,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -l|--local)
       LOCAL_MODE=1
+      shift
+      ;;
+    -n|--preflight)
+      PREFLIGHT=1
       shift
       ;;
     -h|--help)
@@ -233,6 +268,11 @@ if [[ "$LOCAL_MODE" -eq 1 && -n "$TARGET_VERSION" ]]; then
   exit 2
 fi
 
+if [[ "$PREFLIGHT" -eq 1 && "$ACTION" == "uninstall" ]]; then
+  echo "Error: --preflight cannot be combined with --uninstall" >&2
+  exit 2
+fi
+
 if [[ "$ACTION" == "uninstall" && -n "$TARGET_VERSION" ]]; then
   echo "Error: --version cannot be combined with --uninstall" >&2
   exit 2
@@ -243,7 +283,7 @@ if [[ -n "$TARGET_VERSION" && ! "$TARGET_VERSION" =~ ^[A-Za-z0-9._+-]+$ ]]; then
   exit 2
 fi
 
-if [[ "${EUID}" -ne 0 ]]; then
+if [[ "$PREFLIGHT" -ne 1 && "${EUID}" -ne 0 ]]; then
   log_error "Run this script as root (sudo)."
 fi
 
@@ -254,8 +294,12 @@ if [[ "$INSTALL_DIR" == /dev/fd* || "$INSTALL_DIR" == /proc/*/fd* ]]; then
   INSTALL_DIR="/opt/astralink"
 fi
 log_info "Installation directory: $INSTALL_DIR"
-mkdir -p "$INSTALL_DIR" || log_error "Cannot create install directory: $INSTALL_DIR"
-cd "$INSTALL_DIR" || log_error "Cannot access install directory: $INSTALL_DIR"
+if [[ "$PREFLIGHT" -eq 1 ]]; then
+  log_info "Preflight mode: not creating or modifying install directory."
+else
+  mkdir -p "$INSTALL_DIR" || log_error "Cannot create install directory: $INSTALL_DIR"
+fi
+cd "$INSTALL_DIR" 2>/dev/null || cd "$SOURCE_DIR" || log_error "Cannot access install/source directory."
 
 if [[ -f /etc/os-release ]]; then
   # shellcheck disable=SC1091
@@ -374,6 +418,100 @@ do_uninstall() {
 
 if [[ "$ACTION" == "uninstall" ]]; then
   do_uninstall
+  exit 0
+fi
+
+preflight_check_port53() {
+  ss -H -lun "sport = :53" 2>/dev/null | grep -q ':53' && return 0
+  ss -H -ltn "sport = :53" 2>/dev/null | grep -q ':53' && return 0
+  return 1
+}
+
+preflight_show_port53_usage() {
+  log_warn "Current listeners on port 53:"
+  ss -lupn "sport = :53" 2>/dev/null || true
+  ss -ltpn "sport = :53" 2>/dev/null || true
+  lsof -nP -iUDP:53 -iTCP:53 2>/dev/null || true
+}
+
+run_preflight() {
+  log_header "Preflight (non-destructive) checks"
+  log_info "Mode: $( [[ "$LOCAL_MODE" -eq 1 ]] && echo "local" || echo "release" )"
+  log_info "Install directory: $INSTALL_DIR"
+  log_info "Source directory: $SOURCE_DIR"
+  log_info "No services, firewall, sysctl, or files will be changed."
+
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    log_info "OS detected: ${PRETTY_NAME:-unknown}"
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then PM="apt";
+  elif command -v dnf >/dev/null 2>&1; then PM="dnf";
+  elif command -v yum >/dev/null 2>&1; then PM="yum";
+  else PM=""; fi
+  [[ -n "${PM:-}" ]] && log_info "Package manager: $PM" || log_warn "No supported package manager found (apt/dnf/yum)."
+
+  for c in ss systemctl sysctl curl unzip; do
+    if command -v "$c" >/dev/null 2>&1; then
+      log_success "Found command: $c"
+    else
+      log_warn "Missing command: $c"
+    fi
+  done
+
+  if command -v ss >/dev/null 2>&1; then
+    if preflight_check_port53; then
+      log_warn "Port 53 currently occupied."
+      preflight_show_port53_usage
+    else
+      log_success "Port 53 appears free."
+    fi
+  fi
+
+  local arch
+  arch="$(uname -m)"
+  if [[ "$LOCAL_MODE" -eq 1 ]]; then
+    local local_bin
+    local_bin="$(find_local_server_binary "$arch" || true)"
+    if [[ -n "$local_bin" ]]; then
+      log_success "Local binary candidate: $local_bin"
+    else
+      log_warn "No local binary found for arch $arch in source/install dirs."
+    fi
+
+    local local_cfg
+    local_cfg="$(find_local_config_candidate || true)"
+    if [[ -n "$local_cfg" ]]; then
+      log_success "Local config candidate: $local_cfg"
+    else
+      log_warn "No server config found (server_config.toml or .simple)."
+    fi
+  else
+    select_release_artifact "$arch" "$TARGET_VERSION"
+    log_info "Release URL candidate: $URL"
+    if command -v curl >/dev/null 2>&1; then
+      if curl -fsIL --connect-timeout 10 "$URL" >/dev/null; then
+        log_success "Release URL reachable."
+      else
+        log_warn "Release URL not reachable (check tag/assets/network)."
+      fi
+    fi
+  fi
+
+  cat <<'SUMMARY'
+
+Preflight summary:
+- This installer will stop conflicting DNS services using port 53.
+- This installer may edit firewall rules and sysctl/limits files.
+- This installer creates/updates systemd units: astralink.service and astralink-egress-filter.service.
+- Review docs/INSTALL_DRY_RUN_CHECKLIST.md before live install.
+SUMMARY
+}
+
+if [[ "$PREFLIGHT" -eq 1 ]]; then
+  run_preflight
   exit 0
 fi
 
