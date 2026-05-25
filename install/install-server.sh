@@ -61,10 +61,10 @@ select_release_artifact() {
 
   local base_url
   if [[ -n "$version" ]]; then
-    base_url="https://github.com/nullroute1970/AstraLink/releases/download/${version}"
+    base_url="https://github.com/mrchatam/astralink/releases/download/${version}"
     log_info "Targeting AstraLink release: ${version}"
   else
-    base_url="https://github.com/nullroute1970/AstraLink/releases/latest/download"
+    base_url="https://github.com/mrchatam/astralink/releases/latest/download"
   fi
 
   case "$arch" in
@@ -98,7 +98,12 @@ select_release_artifact() {
 
 find_local_server_binary() {
   local arch="$1"
-  local search_dirs=("$INSTALL_DIR" "$INSTALL_DIR/dist")
+  local search_dirs=(
+    "$SOURCE_DIR"
+    "$SOURCE_DIR/dist"
+    "$INSTALL_DIR"
+    "$INSTALL_DIR/dist"
+  )
   local pat
 
   case "$arch" in
@@ -122,7 +127,12 @@ find_local_server_binary() {
 }
 
 find_local_config() {
-  local search_dirs=("$INSTALL_DIR" "$INSTALL_DIR/dist")
+  local search_dirs=(
+    "$SOURCE_DIR"
+    "$SOURCE_DIR/dist"
+    "$INSTALL_DIR"
+    "$INSTALL_DIR/dist"
+  )
 
   for sd in "${search_dirs[@]}"; do
     if [[ -f "$sd/server_config.toml" ]]; then
@@ -130,6 +140,12 @@ find_local_config() {
       return 0
     fi
   done
+
+  if [[ -f "$SOURCE_DIR/server_config.toml.simple" ]]; then
+    cp "$SOURCE_DIR/server_config.toml.simple" "$INSTALL_DIR/server_config.toml"
+    echo "$INSTALL_DIR/server_config.toml"
+    return 0
+  fi
 
   if [[ -f "$INSTALL_DIR/server_config.toml.simple" ]]; then
     cp "$INSTALL_DIR/server_config.toml.simple" "$INSTALL_DIR/server_config.toml"
@@ -145,7 +161,7 @@ print_usage() {
 AstraLink Server Linux Installer
 
 Usage:
-  bash <(curl -Ls https://raw.githubusercontent.com/nullroute1970/AstraLink/main/server_linux_install.sh) [OPTIONS]
+  bash <(curl -Ls https://raw.githubusercontent.com/mrchatam/astralink/main/install/install-server.sh) [OPTIONS]
 
 Options:
   -v, --version <VERSION>   Install a specific AstraLink release (tag), e.g. v1.2.3.
@@ -160,17 +176,17 @@ Options:
 
 Examples:
   # Install the latest release (default behavior):
-  bash <(curl -Ls https://raw.githubusercontent.com/nullroute1970/AstraLink/main/server_linux_install.sh)
+  bash <(curl -Ls https://raw.githubusercontent.com/mrchatam/astralink/main/install/install-server.sh)
 
   # Install a specific release version:
-  bash <(curl -Ls https://raw.githubusercontent.com/nullroute1970/AstraLink/main/server_linux_install.sh) --version v1.2.3
+  bash <(curl -Ls https://raw.githubusercontent.com/mrchatam/astralink/main/install/install-server.sh) --version v1.2.3
 
   # Local/offline install for testing:
-  python build.py
-  sudo bash server_linux_install.sh --local
+  make server
+  sudo bash install/install-server.sh --local
 
   # Uninstall AstraLink:
-  bash <(curl -Ls https://raw.githubusercontent.com/nullroute1970/AstraLink/main/server_linux_install.sh) --uninstall
+  bash <(curl -Ls https://raw.githubusercontent.com/mrchatam/astralink/main/install/install-server.sh) --uninstall
 USAGE
 }
 
@@ -232,11 +248,13 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 INSTALL_DIR="/opt/astralink"
+SOURCE_DIR="${PWD:-/opt/astralink}"
 [[ -n "${PWD:-}" ]] && INSTALL_DIR="/opt/astralink"
 if [[ "$INSTALL_DIR" == /dev/fd* || "$INSTALL_DIR" == /proc/*/fd* ]]; then
   INSTALL_DIR="/opt/astralink"
 fi
 log_info "Installation directory: $INSTALL_DIR"
+mkdir -p "$INSTALL_DIR" || log_error "Cannot create install directory: $INSTALL_DIR"
 cd "$INSTALL_DIR" || log_error "Cannot access install directory: $INSTALL_DIR"
 
 if [[ -f /etc/os-release ]]; then
@@ -348,7 +366,7 @@ do_uninstall() {
   fi
 
   echo -e "\n${CYAN}======================================================${NC}"
-  echo -e " ${GREEN}${BOLD}        STORMDNS UNINSTALL COMPLETED${NC}"
+  echo -e " ${GREEN}${BOLD}        ASTRALINK UNINSTALL COMPLETED${NC}"
   echo -e "${CYAN}======================================================${NC}"
   echo -e "${YELLOW}Note:${NC} Firewall rules for port 53 (UDP/TCP) were left in place."
   echo -e "      Remove them manually if no longer needed."
@@ -732,7 +750,7 @@ if [[ "$LOCAL_MODE" -eq 1 ]]; then
   ARCH="$(uname -m)"
 
   LOCAL_BIN="$(find_local_server_binary "$ARCH")"
-  [[ -z "$LOCAL_BIN" ]] && log_error "No AstraLink server binary found. Run 'python build.py' first."
+  [[ -z "$LOCAL_BIN" ]] && log_error "No AstraLink server binary found. Run 'make server' first."
   log_info "Found binary: $LOCAL_BIN"
 
   LOCAL_BIN_DIR="$(dirname "$LOCAL_BIN")"
